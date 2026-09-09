@@ -1,0 +1,70 @@
+###############################################################################
+# Repository-specific Semgrep rules. These encode the mistakes that are cheap
+# to make in this codebase and expensive in production.
+###############################################################################
+rules:
+  - id: no-prompt-in-logs
+    languages: [python]
+    severity: ERROR
+    message: >-
+      Prompt or completion text must never be logged. Log a digest
+      (audit.digest) instead - CloudWatch retains logs for a year.
+    patterns:
+      - pattern-either:
+          - pattern: $LOG.info(..., prompt=$X, ...)
+          - pattern: $LOG.info(..., messages=$X, ...)
+          - pattern: $LOG.debug(..., content=$X, ...)
+          - pattern: $LOG.warning(..., completion=$X, ...)
+
+  - id: no-eval-or-exec
+    languages: [python]
+    severity: ERROR
+    message: >-
+      eval/exec in a service that processes model output is remote code
+      execution. Use an AST-restricted evaluator (see tools.calculate).
+    patterns:
+      - pattern-either:
+          - pattern: eval(...)
+          - pattern: exec(...)
+
+  - id: bedrock-invoke-must-carry-guardrail
+    languages: [python]
+    severity: WARNING
+    message: >-
+      Bedrock invocations must pass guardrailConfig. The IAM policy enforces
+      this too, but failing at review is cheaper than failing at runtime.
+    patterns:
+      - pattern: $CLIENT.converse(...)
+      - pattern-not: $CLIENT.converse(..., guardrailConfig=..., ...)
+      - pattern-not-inside: |
+          def test_$X(...):
+            ...
+
+  - id: no-broad-except-swallowing
+    languages: [python]
+    severity: WARNING
+    message: A bare `except: pass` hides the failure you will be paged about.
+    patterns:
+      - pattern: |
+          try:
+            ...
+          except ...:
+            pass
+
+  - id: sql-must-be-parameterised
+    languages: [python]
+    severity: ERROR
+    message: Build SQL with bound parameters, never f-strings.
+    patterns:
+      - pattern-either:
+          - pattern: text(f"...")
+          - pattern: $CUR.execute(f"...")
+
+  - id: no-verify-false
+    languages: [python]
+    severity: ERROR
+    message: TLS verification must not be disabled.
+    patterns:
+      - pattern-either:
+          - pattern: requests.$M(..., verify=False, ...)
+          - pattern: httpx.$M(..., verify=False, ...)

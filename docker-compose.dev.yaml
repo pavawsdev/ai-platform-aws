@@ -1,0 +1,35 @@
+# Local dependencies only. The services themselves run with `uvicorn --reload`
+# so the edit/test loop does not involve a container build.
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: aiplatform
+      POSTGRES_PASSWORD: localdev
+      POSTGRES_DB: aiplatform
+    ports: ["5432:5432"]
+    volumes:
+      - ./ops/sql:/migrations:ro
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aiplatform"]
+      interval: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+    ports: ["6379:6379"]
+
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.19.0
+    command: >
+      mlflow server --host 0.0.0.0 --port 5000
+      --backend-store-uri sqlite:////mlflow/mlflow.db
+      --default-artifact-root /mlflow/artifacts
+    ports: ["5000:5000"]
+    volumes: [mlflow:/mlflow]
+
+volumes:
+  pgdata:
+  mlflow:
