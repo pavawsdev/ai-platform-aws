@@ -1,0 +1,22 @@
+version: 2
+updates:
+  - package-ecosystem: pip
+    directories: ["/services/ai-gateway", "/services/rag-service", "/services/agent-service", "/services/eval-service", "/libs/platform_common"]
+    schedule: { interval: weekly, day: monday }
+    open-pull-requests-limit: 5
+    groups:
+      # One PR per ecosystem, not thirty. Reviewers actually read grouped PRs.
+      patch-and-minor:
+        update-types: [minor, patch]
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule: { interval: weekly }
+    groups:
+      actions:
+        patterns: ["*"]
+  - package-ecosystem: docker
+    directories: ["/services/*"]
+    schedule: { interval: weekly }
+  - package-ecosystem: terraform
+    directory: "/infra/terraform"
+    schedule: { interval: monthly }

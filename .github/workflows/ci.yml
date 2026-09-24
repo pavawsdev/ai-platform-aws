@@ -1,0 +1,235 @@
+###############################################################################
+# Pull request CI. Fast, parallel, and blocking.
+# Everything here runs on every PR; nothing here talks to a cluster.
+###############################################################################
+name: ci
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write
+  security-events: write
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  changes:
+    # Path filtering keeps a docs-only PR from running a 12-minute matrix.
+    runs-on: ubuntu-latest
+    outputs:
+      services: ${{ steps.filter.outputs.changes }}
+      terraform: ${{ steps.tf.outputs.terraform }}
+      charts: ${{ steps.tf.outputs.charts }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            ai-gateway: ['services/ai-gateway/**', 'libs/**']
+            rag-service: ['services/rag-service/**', 'libs/**']
+            agent-service: ['services/agent-service/**', 'libs/**']
+            eval-service: ['services/eval-service/**', 'libs/**']
+      - uses: dorny/paths-filter@v3
+        id: tf
+        with:
+          filters: |
+            terraform: ['infra/terraform/**']
+            charts: ['deploy/helm/**']
+
+  python:
+    needs: changes
+    if: needs.changes.outputs.services != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service: ${{ fromJSON(needs.changes.outputs.services) }}
+    defaults:
+      run:
+        working-directory: services/${{ matrix.service }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: services/${{ matrix.service }}/requirements-dev.txt
+
+      - name: Install
+        run: |
+          pip install -r requirements-dev.txt
+          pip install -e ../../libs/platform_common
+
+      - name: Lint
+        run: ruff check app tests
+
+      - name: Format check
+        run: ruff format --check app tests
+
+      - name: Type check
+        run: mypy app || echo "::warning::mypy findings are advisory on this service"
+
+      - name: Unit tests
+        run: pytest --junitxml=results.xml
+
+      - name: Static security analysis
+        run: bandit -r app -ll -f sarif -o bandit.sarif || true
+
+      - name: Upload SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: services/${{ matrix.service }}/bandit.sarif
+          category: bandit-${{ matrix.service }}
+
+      - name: Publish test results
+        if: always()
+        uses: mikepenz/action-junit-report@v5
+        with:
+          report_paths: services/${{ matrix.service }}/results.xml
+
+  terraform:
+    needs: changes
+    if: needs.changes.outputs.terraform == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
+    strategy:
+      matrix:
+        env: [dev, prod]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.10.3
+
+      - name: Format
+        run: terraform fmt -check -recursive infra/terraform
+
+      - name: Init
+        working-directory: infra/terraform/envs/${{ matrix.env }}
+        run: terraform init -backend=false
+
+      - name: Validate
+        working-directory: infra/terraform/envs/${{ matrix.env }}
+        run: terraform validate
+
+      - uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: v0.54.0
+      - name: tflint
+        run: |
+          tflint --init --config="${GITHUB_WORKSPACE}/.tflint.hcl"
+          tflint --recursive --config="${GITHUB_WORKSPACE}/.tflint.hcl" --format compact
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_PLAN_ROLE_ARN }}
+          aws-region: ap-south-1
+
+      - name: Plan
+        id: plan
+        working-directory: infra/terraform/envs/${{ matrix.env }}
+        run: |
+          terraform init -backend-config=backend.hcl
+          terraform plan -var-file=${{ matrix.env }}.tfvars -out=tfplan -no-color
+          terraform show -json tfplan > tfplan.json
+          terraform show -no-color tfplan > plan.txt
+
+      - name: Policy check (conftest)
+        uses: docker://openpolicyagent/conftest:v0.56.0
+        with:
+          args: test --policy policy/opa infra/terraform/envs/${{ matrix.env }}/tfplan.json
+
+      - name: Comment plan on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const plan = fs.readFileSync('infra/terraform/envs/${{ matrix.env }}/plan.txt', 'utf8');
+            const truncated = plan.length > 60000 ? plan.slice(0, 60000) + '\n... truncated' : plan;
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `### Terraform plan — \`${{ matrix.env }}\`\n\n<details><summary>show</summary>\n\n\`\`\`hcl\n${truncated}\n\`\`\`\n\n</details>`
+            });
+
+  helm:
+    needs: changes
+    if: needs.changes.outputs.charts == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.3
+
+      - name: Lint chart against every service's values
+        run: |
+          for values in deploy/helm/values/*.yaml; do
+            echo "::group::$values"
+            helm lint deploy/helm/service --values "$values" --strict
+            helm template test deploy/helm/service --values "$values" > /tmp/$(basename "$values").rendered
+            echo "::endgroup::"
+          done
+
+      - uses: yannh/kubeconform-action@v1
+        with:
+          args: -strict -ignore-missing-schemas -summary /tmp/*.rendered
+
+      - name: Policy test rendered manifests
+        run: |
+          docker run --rm -v /tmp:/manifests -v "$PWD/policy/kyverno:/policies" \
+            ghcr.io/kyverno/kyverno-cli:v1.13.2 apply /policies \
+            --resource /manifests --detailed-results || true
+
+  build-check:
+    needs: changes
+    if: needs.changes.outputs.services != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: ${{ fromJSON(needs.changes.outputs.services) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: services/${{ matrix.service }}/Dockerfile
+          push: false
+          load: true
+          tags: ${{ matrix.service }}:ci
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+      - name: Scan image
+        uses: aquasecurity/trivy-action@0.29.0
+        with:
+          image-ref: ${{ matrix.service }}:ci
+          format: sarif
+          output: trivy.sarif
+          severity: CRITICAL,HIGH
+          exit-code: "1"
+          ignore-unfixed: true
+      - if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy.sarif
+          category: trivy-${{ matrix.service }}

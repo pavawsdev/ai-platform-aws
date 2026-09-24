@@ -1,0 +1,140 @@
+###############################################################################
+# The LLMOps release gate.
+#
+# A prompt or model change is not a config change - it is a behaviour change,
+# and the only honest way to ship it is to measure it. This workflow runs the
+# candidate against the golden dataset in dev, compares it to the version
+# currently in production, and refuses to promote on a regression.
+#
+# Triggered by any change to a prompt file or to routing.yaml.
+###############################################################################
+name: model-promotion
+
+on:
+  pull_request:
+    paths:
+      - 'services/ai-gateway/config/prompts/**'
+      - 'services/ai-gateway/config/routing.yaml'
+  workflow_dispatch:
+    inputs:
+      prompt_id:
+        required: true
+      candidate_version:
+        required: true
+      baseline_version:
+        required: false
+      model_alias:
+        default: balanced
+
+permissions:
+  contents: read
+  id-token: write
+  pull-requests: write
+
+jobs:
+  evaluate:
+    runs-on: ubuntu-latest
+    environment: dev          # evaluation runs against the dev gateway
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_PLAN_ROLE_ARN }}
+          aws-region: ap-south-1
+
+      - name: Install eval harness
+        run: |
+          pip install -r services/eval-service/requirements.txt
+          pip install -e libs/platform_common
+
+      - name: Detect which prompt changed
+        id: detect
+        run: |
+          set -euo pipefail
+          if [ -n "${{ github.event.inputs.prompt_id }}" ]; then
+            echo "prompt_id=${{ github.event.inputs.prompt_id }}" >> "$GITHUB_OUTPUT"
+            echo "candidate=${{ github.event.inputs.candidate_version }}" >> "$GITHUB_OUTPUT"
+            echo "baseline=${{ github.event.inputs.baseline_version }}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          changed=$(git diff --name-only HEAD^ HEAD -- services/ai-gateway/config/prompts | head -1)
+          [ -n "$changed" ] || { echo "no prompt changed"; exit 0; }
+          prompt_id=$(python -c "import yaml,sys;print(yaml.safe_load(open(sys.argv[1]))['id'])" "$changed")
+          # Candidate = the highest-numbered non-archived version in the file.
+          read -r candidate baseline < <(python - "$changed" <<'PY'
+          import sys, yaml
+          spec = yaml.safe_load(open(sys.argv[1]))
+          versions = spec["versions"]
+          canary = [v for v, s in versions.items() if s.get("status") == "canary"]
+          prod = [v for v, s in versions.items() if s.get("status") == "production"]
+          print(sorted(canary or prod)[-1], sorted(prod)[-1] if prod else "")
+          PY
+          )
+          echo "prompt_id=$prompt_id" >> "$GITHUB_OUTPUT"
+          echo "candidate=$candidate" >> "$GITHUB_OUTPUT"
+          echo "baseline=$baseline" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch eval API key
+        if: steps.detect.outputs.prompt_id != ''
+        run: |
+          key=$(aws secretsmanager get-secret-value \
+            --secret-id aiplat-dev/internal/eval-api-key \
+            --query SecretString --output text)
+          echo "::add-mask::$key"
+          echo "EVAL_API_KEY=$key" >> "$GITHUB_ENV"
+
+      - name: Run evaluation gate
+        if: steps.detect.outputs.prompt_id != ''
+        id: eval
+        env:
+          GATEWAY_URL: ${{ secrets.DEV_GATEWAY_URL }}
+          MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
+        working-directory: services/eval-service
+        run: |
+          python -m app.cli \
+            --dataset "s3://aiplat-dev-model-artifacts-111122223333/eval/${{ steps.detect.outputs.prompt_id }}/golden.jsonl" \
+            --prompt-id "${{ steps.detect.outputs.prompt_id }}" \
+            --prompt-version "${{ steps.detect.outputs.candidate }}" \
+            --baseline-version "${{ steps.detect.outputs.baseline }}" \
+            --model "${{ github.event.inputs.model_alias || 'balanced' }}" \
+            --thresholds-from-registry \
+            --registry-dir ../../services/ai-gateway/config/prompts \
+            --fail-on-regression \
+            --output "${GITHUB_WORKSPACE}/eval-report.json"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: eval-report
+          path: eval-report.json
+
+      - name: Comment result on the PR
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            if (!fs.existsSync('eval-report.json')) return;
+            const r = JSON.parse(fs.readFileSync('eval-report.json', 'utf8'));
+            const c = r.candidate, b = r.baseline;
+            const row = (m) => `| ${m} | ${c[m].toFixed(4)} | ${b ? b[m].toFixed(4) : '-'} | ${b ? (c[m]-b[m]).toFixed(4) : '-'} |`;
+            const body = [
+              r.promote ? '## Evaluation passed — safe to promote' : '## Evaluation FAILED — promotion blocked',
+              '', `Candidate: \`${c.candidate}\` on ${c.case_count} cases`, '',
+              '| metric | candidate | baseline | delta |', '| --- | ---: | ---: | ---: |',
+              row('faithfulness'), row('answer_relevancy'), row('context_precision'),
+              row('refusal_rate'), row('p95_latency_ms'), row('cost_per_1k_requests_usd'), '',
+              r.threshold_failures.length ? '**Threshold failures**\n' + r.threshold_failures.map(x => `- ${x}`).join('\n') : '',
+              r.regressions.length ? '**Regressions**\n' + r.regressions.map(x => `- ${x}`).join('\n') : '',
+            ].join('\n');
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number, owner: context.repo.owner,
+              repo: context.repo.repo, body
+            });
