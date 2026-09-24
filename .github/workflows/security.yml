@@ -55,6 +55,7 @@ jobs:
           category: checkov
 
       - name: tfsec
+        if: always()
         uses: aquasecurity/tfsec-sarif-action@v0.1.4
         with:
           sarif_file: tfsec.sarif
@@ -78,7 +79,7 @@ jobs:
         service: [ai-gateway, rag-service, agent-service, eval-service]
     steps:
       - uses: actions/checkout@v4
-      - uses: aquasecurity/trivy-action@0.29.0
+      - uses: aquasecurity/trivy-action@v0.29.0
         with:
           scan-type: fs
           scan-ref: services/${{ matrix.service }}

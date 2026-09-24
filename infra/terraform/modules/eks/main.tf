@@ -42,6 +42,10 @@ resource "aws_iam_role_policy_attachment" "cluster" {
 }
 
 ############################  Cluster security group  #########################
+#checkov:skip=CKV_AWS_382:the EKS-managed control-plane ENIs need broad HTTPS/DNS/etc
+#  egress to reach AWS APIs (STS, ECR, CloudWatch, ...) and to run add-ons; scoping
+#  this to specific AWS service CIDRs would need to track AWS's published IP ranges
+#  and still not cover every endpoint the control plane calls.
 resource "aws_security_group" "cluster" {
   name        = "${var.cluster_name}-cluster"
   description = "EKS control plane"

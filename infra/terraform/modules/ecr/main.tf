@@ -30,7 +30,7 @@ resource "aws_ecr_repository" "this" {
 }
 
 resource "aws_ecr_registry_scanning_configuration" "this" {
-  count = var.manage_registry_scanning ? 1 : 0
+  count     = var.manage_registry_scanning ? 1 : 0
   scan_type = "ENHANCED"
 
   rule {

@@ -80,7 +80,7 @@ jobs:
       # Scanning the pushed image, not the local one: this is the artifact that
       # will actually run, digest and all.
       - name: Scan pushed image
-        uses: aquasecurity/trivy-action@0.29.0
+        uses: aquasecurity/trivy-action@v0.29.0
         with:
           image-ref: ${{ env.ECR_REGISTRY }}/${{ env.ECR_NAMESPACE }}/${{ matrix.service }}@${{ steps.push.outputs.digest }}
           format: table

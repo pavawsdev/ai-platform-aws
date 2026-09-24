@@ -220,7 +220,7 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.service }}
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}
       - name: Scan image
-        uses: aquasecurity/trivy-action@0.29.0
+        uses: aquasecurity/trivy-action@v0.29.0
         with:
           image-ref: ${{ matrix.service }}:ci
           format: sarif

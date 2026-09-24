@@ -59,6 +59,11 @@ resource "aws_rds_cluster_parameter_group" "cluster" {
     value = "500"
   }
 
+  parameter {
+    name  = "log_statement"
+    value = "ddl"
+  }
+
   tags = local.tags
 }
 
@@ -67,6 +72,8 @@ resource "random_password" "master" {
   special = false
 }
 
+#checkov:skip=CKV2_AWS_57:automatic rotation needs a dedicated rotation Lambda for
+#  Aurora; tracked as follow-up work, not yet built.
 resource "aws_secretsmanager_secret" "db" {
   name        = "${var.name}/rds/master"
   description = "Aurora master credentials for the AI platform"
@@ -89,6 +96,8 @@ resource "aws_secretsmanager_secret_version" "db" {
   })
 }
 
+#checkov:skip=CKV2_AWS_8:backed up by the tag-based aws_backup_selection in
+#  modules/backup-dr, applied at the stack level - not visible to a per-module scan.
 resource "aws_rds_cluster" "this" {
   cluster_identifier              = "${var.name}-pgvector"
   engine                          = "aurora-postgresql"
@@ -132,17 +141,17 @@ resource "aws_rds_cluster" "this" {
 resource "aws_rds_cluster_instance" "this" {
   count = var.instance_count
 
-  identifier                   = "${var.name}-pgvector-${count.index}"
-  cluster_identifier           = aws_rds_cluster.this.id
-  instance_class               = "db.serverless"
-  engine                       = aws_rds_cluster.this.engine
-  engine_version               = aws_rds_cluster.this.engine_version
-  db_parameter_group_name      = aws_db_parameter_group.instance.name
-  performance_insights_enabled = true
+  identifier                      = "${var.name}-pgvector-${count.index}"
+  cluster_identifier              = aws_rds_cluster.this.id
+  instance_class                  = "db.serverless"
+  engine                          = aws_rds_cluster.this.engine
+  engine_version                  = aws_rds_cluster.this.engine_version
+  db_parameter_group_name         = aws_db_parameter_group.instance.name
+  performance_insights_enabled    = true
   performance_insights_kms_key_id = var.kms_key_arn
-  monitoring_interval          = 30
-  monitoring_role_arn          = aws_iam_role.monitoring.arn
-  auto_minor_version_upgrade   = true
+  monitoring_interval             = 30
+  monitoring_role_arn             = aws_iam_role.monitoring.arn
+  auto_minor_version_upgrade      = true
   # index 0 is writer; the rest are readers in other AZs
   promotion_tier = count.index
   tags           = local.tags
