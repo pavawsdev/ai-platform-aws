@@ -25,10 +25,23 @@ locals {
   }
 }
 
+data "aws_iam_policy_document" "state_key" {
+  statement {
+    sid       = "RootAccountAdmin"
+    actions   = ["kms:*"]
+    resources = ["*"]
+    principals {
+      type        = "AWS"
+      identifiers = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"]
+    }
+  }
+}
+
 resource "aws_kms_key" "state" {
   description             = "Terraform state encryption"
   enable_key_rotation     = true
   deletion_window_in_days = 30
+  policy                  = data.aws_iam_policy_document.state_key.json
   tags                    = local.tags
 }
 
@@ -37,6 +50,9 @@ resource "aws_kms_alias" "state" {
   target_key_id = aws_kms_key.state.key_id
 }
 
+#checkov:skip=CKV_AWS_18:this bucket only ever holds Terraform state, read by CI
+#  roles and operators already covered by CloudTrail management-event logging;
+#  a second, S3-native access-log stream adds cost with no new signal here.
 resource "aws_s3_bucket" "state" {
   bucket = local.bucket_name
   tags   = local.tags
@@ -74,6 +90,7 @@ resource "aws_s3_bucket_lifecycle_configuration" "state" {
     status = "Enabled"
     filter {}
     noncurrent_version_expiration { noncurrent_days = 90 }
+    abort_incomplete_multipart_upload { days_after_initiation = 7 }
   }
 }
 
@@ -213,6 +230,9 @@ data "aws_iam_policy_document" "github_apply_assume" {
   }
 }
 
+#checkov:skip=CKV_AWS_274:AdministratorAccess is intentional here - this role can
+#  only be assumed by a workflow run inside the protected "prod" GitHub Environment
+#  (required reviewers), which is the actual access control, not the policy scope.
 resource "aws_iam_role_policy_attachment" "github_apply" {
   role       = aws_iam_role.github_apply.name
   policy_arn = "arn:aws:iam::aws:policy/AdministratorAccess"

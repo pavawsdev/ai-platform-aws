@@ -40,18 +40,26 @@ resource "aws_wafv2_regex_pattern_set" "prompt_injection" {
   }
 }
 
+#checkov:skip=CKV_AWS_192:AWSManagedRulesKnownBadInputsRuleSet (which covers the
+#  Log4Shell/CVE-2021-44228 pattern) is in var.managed_rule_groups's default,
+#  applied not-counted below via the dynamic "rule" block; checkov's static
+#  analysis can't trace a managed rule group name through a for_each on a variable.
 resource "aws_wafv2_web_acl" "this" {
   name        = "${var.name}-web-acl"
   description = "Edge protection for the AI platform API"
   scope       = "REGIONAL"
 
-  default_action { allow {} }
+  default_action {
+    allow {}
+  }
 
   # 1. Deny-listed source IPs
   rule {
     name     = "ip-blocklist"
     priority = 0
-    action { block {} }
+    action {
+      block {}
+    }
     statement {
       ip_set_reference_statement { arn = aws_wafv2_ip_set.blocklist.arn }
     }
@@ -99,7 +107,9 @@ resource "aws_wafv2_web_acl" "this" {
   rule {
     name     = "rate-limit-ip"
     priority = 50
-    action { block {} }
+    action {
+      block {}
+    }
     statement {
       rate_based_statement {
         limit              = var.rate_limit_per_5min
@@ -117,7 +127,9 @@ resource "aws_wafv2_web_acl" "this" {
   rule {
     name     = "rate-limit-api-key"
     priority = 51
-    action { block {} }
+    action {
+      block {}
+    }
     statement {
       rate_based_statement {
         limit              = var.rate_limit_per_key_5min
@@ -158,7 +170,9 @@ resource "aws_wafv2_web_acl" "this" {
     statement {
       regex_pattern_set_reference_statement {
         arn = aws_wafv2_regex_pattern_set.prompt_injection.arn
-        field_to_match { body { oversize_handling = "CONTINUE" } }
+        field_to_match {
+          body { oversize_handling = "CONTINUE" }
+        }
         text_transformation {
           priority = 0
           type     = "LOWERCASE"

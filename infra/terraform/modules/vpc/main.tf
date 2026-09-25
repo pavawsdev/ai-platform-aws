@@ -33,6 +33,14 @@ resource "aws_internet_gateway" "this" {
   tags   = merge(local.tags, { Name = "${var.name}-igw" })
 }
 
+# The VPC's auto-created default security group is unused - every real
+# resource gets its own purpose-built SG - so it is locked to deny all
+# traffic rather than left at its AWS default of "allow all within itself".
+resource "aws_default_security_group" "this" {
+  vpc_id = aws_vpc.this.id
+  tags   = merge(local.tags, { Name = "${var.name}-default-locked" })
+}
+
 resource "aws_subnet" "public" {
   for_each = { for i, az in local.azs : az => i }
 
@@ -226,10 +234,10 @@ resource "aws_iam_role_policy" "flow" {
 }
 
 resource "aws_flow_log" "this" {
-  iam_role_arn         = aws_iam_role.flow.arn
-  log_destination      = aws_cloudwatch_log_group.flow.arn
-  traffic_type         = "ALL"
-  vpc_id               = aws_vpc.this.id
+  iam_role_arn             = aws_iam_role.flow.arn
+  log_destination          = aws_cloudwatch_log_group.flow.arn
+  traffic_type             = "ALL"
+  vpc_id                   = aws_vpc.this.id
   max_aggregation_interval = 60
-  tags                 = local.tags
+  tags                     = local.tags
 }

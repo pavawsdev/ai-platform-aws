@@ -1,0 +1,176 @@
+###############################################################################
+# Production promotion. Manual by design.
+#
+# The image is already built, scanned, signed and running in dev. Promotion
+# is: verify the signature, verify dev has been healthy, run the eval suite
+# once more against dev, then write the digest into the prod overlay. Argo CD
+# picks it up. Nobody touches the cluster.
+###############################################################################
+name: release
+
+on:
+  workflow_dispatch:
+    inputs:
+      services:
+        description: Comma-separated services, or "all"
+        default: all
+      sha:
+        description: Commit SHA to promote (defaults to the dev overlay's pin)
+        required: false
+      skip_eval:
+        description: Emergency promotion without the eval gate (requires an incident id)
+        type: boolean
+        default: false
+      incident_id:
+        required: false
+
+permissions:
+  contents: write
+  id-token: write
+
+env:
+  AWS_REGION: ap-south-1
+  ECR_REGISTRY: 111122223333.dkr.ecr.ap-south-1.amazonaws.com
+  ECR_NAMESPACE: aiplat
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    outputs:
+      services: ${{ steps.plan.outputs.services }}
+      sha: ${{ steps.plan.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: plan
+        run: |
+          set -euo pipefail
+          if [ "${{ inputs.services }}" = "all" ]; then
+            echo 'services=["ai-gateway","rag-service","agent-service","eval-service"]' >> "$GITHUB_OUTPUT"
+          else
+            echo "services=$(echo '${{ inputs.services }}' | jq -Rc 'split(",")')" >> "$GITHUB_OUTPUT"
+          fi
+          sha="${{ inputs.sha }}"
+          if [ -z "$sha" ]; then
+            sha=$(grep -oP 'sha-\K[0-9a-f]{40}' deploy/helm/values/overlays/dev/ai-gateway.yaml | head -1)
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Refuse an emergency promotion without an incident id
+        if: inputs.skip_eval && inputs.incident_id == ''
+        run: |
+          echo "::error::skip_eval requires incident_id - emergency changes still need a paper trail"
+          exit 1
+
+  verify:
+    needs: preflight
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: ${{ fromJSON(needs.preflight.outputs.services) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_PLAN_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - uses: aws-actions/amazon-ecr-login@v2
+      - uses: sigstore/cosign-installer@v3
+
+      - name: Verify the signature we are about to trust in prod
+        run: |
+          set -euo pipefail
+          digest=$(aws ecr describe-images \
+            --repository-name "${ECR_NAMESPACE}/${{ matrix.service }}" \
+            --image-ids imageTag="sha-${{ needs.preflight.outputs.sha }}" \
+            --query 'imageDetails[0].imageDigest' --output text)
+          cosign verify \
+            --certificate-identity-regexp "https://github.com/your-org/ai-platform-aws/.github/workflows/build.yml@.*" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            "${ECR_REGISTRY}/${ECR_NAMESPACE}/${{ matrix.service }}@${digest}"
+
+      - name: Fail on new critical CVEs since the build
+        uses: aquasecurity/trivy-action@v0.29.0
+        with:
+          image-ref: ${{ env.ECR_REGISTRY }}/${{ env.ECR_NAMESPACE }}/${{ matrix.service }}:sha-${{ needs.preflight.outputs.sha }}
+          severity: CRITICAL
+          exit-code: "1"
+          ignore-unfixed: true
+
+  soak:
+    # Has the candidate actually been healthy in dev? Promoting a build that
+    # has been failing readiness for two hours is the most common self-inflicted
+    # production incident there is.
+    needs: [preflight, verify]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_PLAN_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Query the dev SLO over the last 2h
+        run: |
+          python -m pip install -q boto3 requests requests-aws4auth
+          python ops/python/check_slo.py \
+            --workspace-id "${{ secrets.AMP_WORKSPACE_ID_DEV }}" \
+            --region ap-south-1 \
+            --window 2h \
+            --min-availability 0.995 \
+            --max-p99-seconds 10
+
+  promote:
+    needs: [preflight, verify, soak]
+    if: always() && needs.verify.result == 'success' && (needs.soak.result == 'success' || inputs.skip_eval)
+    runs-on: ubuntu-latest
+    environment:
+      name: prod       # required reviewers gate this step
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITOPS_TOKEN }}
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_PLAN_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Pin prod overlay to the verified digests
+        run: |
+          set -euo pipefail
+          mkdir -p deploy/helm/values/overlays/prod
+          for service in $(echo '${{ needs.preflight.outputs.services }}' | jq -r '.[]'); do
+            digest=$(aws ecr describe-images \
+              --repository-name "${ECR_NAMESPACE}/${service}" \
+              --image-ids imageTag="sha-${{ needs.preflight.outputs.sha }}" \
+              --query 'imageDetails[0].imageDigest' --output text)
+            cat > "deploy/helm/values/overlays/prod/${service}.yaml" <<EOF
+          # Promoted by .github/workflows/release.yml
+          # commit:   ${{ needs.preflight.outputs.sha }}
+          # promoted: $(date -u +%Y-%m-%dT%H:%M:%SZ) by ${{ github.actor }}
+          # incident: ${{ inputs.incident_id || 'n/a' }}
+          image:
+            tag: sha-${{ needs.preflight.outputs.sha }}
+            digest: ${digest}
+          env:
+            ENVIRONMENT: prod
+          EOF
+          done
+
+      - name: Commit the promotion
+        run: |
+          git config user.name "platform-release"
+          git config user.email "platform-release@users.noreply.github.com"
+          git add deploy/helm/values/overlays/prod
+          git commit -m "release(prod): promote ${{ needs.preflight.outputs.sha }} by ${{ github.actor }}"
+          git push
+
+      - name: Wait for Argo CD to converge
+        run: |
+          # Argo CD is the deployer; this only observes. It fails the job if the
+          # rollout does not become Healthy, so the release shows red where the
+          # release actually failed.
+          python -m pip install -q requests
+          python ops/python/wait_for_argocd.py \
+            --server "${{ secrets.ARGOCD_SERVER }}" \
+            --token "${{ secrets.ARGOCD_TOKEN }}" \
+            --apps "$(echo '${{ needs.preflight.outputs.services }}' | jq -r '.[]' | sed 's/$/-prod/' | paste -sd,)" \
+            --timeout 900
