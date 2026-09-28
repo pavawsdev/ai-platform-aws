@@ -1,5 +1,7 @@
 # AI Platform on AWS — Production LLMOps & Agentic AI Platform
 
+![How a request reaches a model, and why the data tier never can](docs/images/network-architecture.png)
+
 A multi-tenant AI platform that product teams ship on, built the way a platform
 that carries customer data and a five-figure monthly model bill actually has to
 be built: everything provisioned by Terraform, everything deployed by GitOps,

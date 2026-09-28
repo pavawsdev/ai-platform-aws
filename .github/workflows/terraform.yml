@@ -1,0 +1,108 @@
+###############################################################################
+# Terraform apply. Plan happens in ci.yml on every PR; this workflow is the
+# only thing that can change infrastructure, and it can only do so through a
+# GitHub Environment with required reviewers.
+###############################################################################
+name: terraform-apply
+
+on:
+  push:
+    branches: [main]
+    paths: ['infra/terraform/**']
+  workflow_dispatch:
+    inputs:
+      environment:
+        type: choice
+        options: [dev, prod]
+        required: true
+      auto_approve:
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  # Never two applies against the same state. The DynamoDB lock is the backstop;
+  # this is the fix that keeps the queue orderly instead of failing noisily.
+  group: terraform-${{ github.event.inputs.environment || 'dev' }}
+  cancel-in-progress: false
+
+jobs:
+  apply-dev:
+    if: github.event_name == 'push' || github.event.inputs.environment == 'dev'
+    runs-on: ubuntu-latest
+    environment:
+      name: dev
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.10.3
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_APPLY_ROLE_ARN }}
+          aws-region: ap-south-1
+      - name: Apply
+        working-directory: infra/terraform/envs/dev
+        run: |
+          terraform init -backend-config=backend.hcl
+          terraform apply -var-file=dev.tfvars -auto-approve
+      - name: Export outputs for GitOps
+        working-directory: infra/terraform/envs/dev
+        run: terraform output -json > "${GITHUB_WORKSPACE}/tf-outputs-dev.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tf-outputs-dev
+          path: tf-outputs-dev.json
+
+  apply-prod:
+    needs: apply-dev
+    if: always() && (github.event_name == 'push' || github.event.inputs.environment == 'prod')
+    runs-on: ubuntu-latest
+    environment:
+      # Required reviewers + a wait timer are configured on this Environment.
+      # That is the change-management control; it is not enforceable in YAML.
+      name: prod
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.10.3
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_APPLY_ROLE_ARN }}
+          aws-region: ap-south-1
+
+      - name: Plan
+        working-directory: infra/terraform/envs/prod
+        run: |
+          terraform init -backend-config=backend.hcl
+          terraform plan -var-file=prod.tfvars -out=tfplan -detailed-exitcode || \
+            [ $? -eq 2 ]
+
+      - name: Guard against destructive changes
+        working-directory: infra/terraform/envs/prod
+        run: |
+          terraform show -json tfplan > tfplan.json
+          destroys=$(jq '[.resource_changes[]
+            | select(.change.actions | index("delete"))
+            | select(.type | test("aws_rds_cluster|aws_s3_bucket|aws_kms_key|aws_eks_cluster|aws_backup_vault"))] | length' tfplan.json)
+          if [ "$destroys" -gt 0 ]; then
+            echo "::error::plan destroys $destroys stateful resource(s); apply blocked"
+            jq -r '.resource_changes[] | select(.change.actions | index("delete")) | .address' tfplan.json
+            exit 1
+          fi
+
+      - name: Apply
+        working-directory: infra/terraform/envs/prod
+        run: terraform apply tfplan
+
+  drift:
+    # Also runs nightly via drift.yml. Drift is not an emergency, but it must
+    # never be a surprise.
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "see drift.yml"

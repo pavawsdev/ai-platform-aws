@@ -15,6 +15,11 @@ locals {
 
 data "aws_caller_identity" "current" {}
 
+#checkov:skip=CKV_AWS_109:resource="*" is the required self-reference form for a KMS
+#  key policy (it means "this key", not "every resource"); access is actually scoped
+#  by the principal + aws:SourceAccount condition below.
+#checkov:skip=CKV_AWS_111:see CKV_AWS_109 above - same self-referential key-policy pattern.
+#checkov:skip=CKV_AWS_356:see CKV_AWS_109 above - same self-referential key-policy pattern.
 data "aws_iam_policy_document" "key" {
   for_each = local.keys
 

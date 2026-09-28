@@ -82,6 +82,7 @@ resource "aws_cloudtrail" "this" {
 
   cloud_watch_logs_group_arn = "${aws_cloudwatch_log_group.trail.arn}:*"
   cloud_watch_logs_role_arn  = aws_iam_role.trail.arn
+  sns_topic_name             = aws_sns_topic.security.name
 
   # Data events: every read/write of tenant documents and model artifacts is
   # part of the governance audit trail, not just the control-plane calls.
@@ -113,6 +114,8 @@ resource "aws_cloudtrail" "this" {
 }
 
 ##############################  GuardDuty  ####################################
+#checkov:skip=CKV2_AWS_3:this is a single-account setup, not an AWS Organizations
+#  member account, so an org-wide auto-enable configuration does not apply here.
 resource "aws_guardduty_detector" "this" {
   count  = var.manage_guardduty ? 1 : 0
   enable = true

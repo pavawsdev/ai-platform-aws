@@ -9,27 +9,27 @@
 locals {
   buckets = {
     documents = {
-      versioning = true
-      replicate  = true
-      lifecycle  = true
+      versioning  = true
+      replicate   = true
+      lifecycle   = true
       object_lock = false
     }
     model-artifacts = {
-      versioning = true
-      replicate  = true
-      lifecycle  = true
+      versioning  = true
+      replicate   = true
+      lifecycle   = true
       object_lock = false
     }
     audit = {
-      versioning = true
-      replicate  = true
-      lifecycle  = false
+      versioning  = true
+      replicate   = true
+      lifecycle   = false
       object_lock = true
     }
     logs = {
-      versioning = false
-      replicate  = false
-      lifecycle  = true
+      versioning  = false
+      replicate   = false
+      lifecycle   = true
       object_lock = false
     }
   }
@@ -38,6 +38,10 @@ locals {
 
 data "aws_caller_identity" "current" {}
 
+#checkov:skip=CKV_AWS_18:object access is tracked via CloudTrail S3 data events
+#  (see modules/security-baseline), not classic S3 server access logs - avoids a
+#  duplicate logging path and the self-referential problem of the "logs" bucket
+#  logging to itself.
 resource "aws_s3_bucket" "this" {
   for_each = local.buckets
 
@@ -47,6 +51,10 @@ resource "aws_s3_bucket" "this" {
   tags                = merge(local.tags, { Dataset = each.key })
 }
 
+#checkov:skip=CKV_AWS_21:versioning is governed per-bucket by locals.buckets above
+#  (on for documents/model-artifacts/audit, off for logs by design - logs are
+#  append-only and already lifecycle-managed); checkov cannot resolve the per-key
+#  ternary in versioning_configuration.status statically.
 resource "aws_s3_bucket_versioning" "this" {
   for_each = local.buckets
   bucket   = aws_s3_bucket.this[each.key].id
@@ -111,9 +119,9 @@ data "aws_iam_policy_document" "bucket" {
   }
 
   statement {
-    sid     = "DenyUnencryptedObjectUploads"
-    effect  = "Deny"
-    actions = ["s3:PutObject"]
+    sid       = "DenyUnencryptedObjectUploads"
+    effect    = "Deny"
+    actions   = ["s3:PutObject"]
     resources = ["${aws_s3_bucket.this[each.key].arn}/*"]
     principals {
       type        = "*"
@@ -133,6 +141,9 @@ resource "aws_s3_bucket_policy" "this" {
   policy   = data.aws_iam_policy_document.bucket[each.key].json
 }
 
+#checkov:skip=CKV2_AWS_61:lifecycle is governed per-bucket by locals.buckets above;
+#  "audit" is intentionally excluded because Object Lock/WORM governs its retention
+#  and a lifecycle transition or expiration rule would fight that governance.
 resource "aws_s3_bucket_lifecycle_configuration" "this" {
   for_each = { for k, v in local.buckets : k => v if v.lifecycle }
   bucket   = aws_s3_bucket.this[each.key].id
@@ -166,8 +177,8 @@ resource "aws_s3_bucket_lifecycle_configuration" "this" {
 # Cross-region replication for DR (RPO ~15 min via RTC)
 ###############################################################################
 resource "aws_iam_role" "replication" {
-  count              = var.enable_replication ? 1 : 0
-  name               = "${var.name}-s3-replication"
+  count = var.enable_replication ? 1 : 0
+  name  = "${var.name}-s3-replication"
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{

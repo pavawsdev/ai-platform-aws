@@ -38,10 +38,10 @@ resource "aws_sqs_queue_policy" "interruption" {
 
 resource "aws_cloudwatch_event_rule" "this" {
   for_each = {
-    spot_interruption   = { source = ["aws.ec2"], detail_type = ["EC2 Spot Instance Interruption Warning"] }
-    rebalance           = { source = ["aws.ec2"], detail_type = ["EC2 Instance Rebalance Recommendation"] }
-    instance_state      = { source = ["aws.ec2"], detail_type = ["EC2 Instance State-change Notification"] }
-    scheduled_change    = { source = ["aws.health"], detail_type = ["AWS Health Event"] }
+    spot_interruption = { source = ["aws.ec2"], detail_type = ["EC2 Spot Instance Interruption Warning"] }
+    rebalance         = { source = ["aws.ec2"], detail_type = ["EC2 Instance Rebalance Recommendation"] }
+    instance_state    = { source = ["aws.ec2"], detail_type = ["EC2 Instance State-change Notification"] }
+    scheduled_change  = { source = ["aws.health"], detail_type = ["AWS Health Event"] }
   }
 
   name          = "${var.cluster_name}-karpenter-${each.key}"
@@ -85,8 +85,8 @@ resource "aws_iam_role" "controller" {
 
 data "aws_iam_policy_document" "controller" {
   statement {
-    sid = "AllowScopedEC2InstanceActions"
-    actions = ["ec2:RunInstances", "ec2:CreateFleet", "ec2:CreateLaunchTemplate"]
+    sid       = "AllowScopedEC2InstanceActions"
+    actions   = ["ec2:RunInstances", "ec2:CreateFleet", "ec2:CreateLaunchTemplate"]
     resources = ["*"]
     condition {
       test     = "StringEquals"
@@ -112,7 +112,7 @@ data "aws_iam_policy_document" "controller" {
   }
 
   statement {
-    sid = "AllowScopedTerminationAndTagging"
+    sid       = "AllowScopedTerminationAndTagging"
     actions   = ["ec2:TerminateInstances", "ec2:DeleteLaunchTemplate", "ec2:CreateTags"]
     resources = ["*"]
     condition {
@@ -195,10 +195,10 @@ resource "helm_release" "karpenter" {
         limits   = { memory = "1Gi" }
       }
     }
-    replicas = 2
-    tolerations = [{ key = "CriticalAddonsOnly", operator = "Exists", effect = "NoSchedule" }]
-    nodeSelector = { "workload-class" = "system" }
+    replicas            = 2
+    tolerations         = [{ key = "CriticalAddonsOnly", operator = "Exists", effect = "NoSchedule" }]
+    nodeSelector        = { "workload-class" = "system" }
     podDisruptionBudget = { name = "karpenter", maxUnavailable = 1 }
-    serviceMonitor = { enabled = true }
+    serviceMonitor      = { enabled = true }
   })]
 }

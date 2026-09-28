@@ -34,7 +34,7 @@ variable "interface_endpoints" {
 
 variable "flow_log_retention_days" {
   type    = number
-  default = 90
+  default = 365
 }
 
 variable "kms_key_arn" { type = string }

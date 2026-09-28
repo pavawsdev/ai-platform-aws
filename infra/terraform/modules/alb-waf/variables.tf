@@ -65,7 +65,7 @@ variable "prompt_injection_patterns" {
 
 variable "log_retention_days" {
   type    = number
-  default = 90
+  default = 365
 }
 
 variable "tags" { type = map(string) }

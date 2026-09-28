@@ -1,0 +1,57 @@
+name: drift-detection
+
+on:
+  schedule:
+    - cron: "0 2 * * *"     # 07:30 IST, before the working day
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+  issues: write
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        environment: [dev, prod]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.10.3
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_PLAN_ROLE_ARN }}
+          aws-region: ap-south-1
+
+      - name: Plan (refresh only)
+        id: plan
+        working-directory: infra/terraform/envs/${{ matrix.environment }}
+        continue-on-error: true
+        run: |
+          terraform init -backend-config=backend.hcl
+          terraform plan -var-file=${{ matrix.environment }}.tfvars \
+            -detailed-exitcode -no-color -out=drift.tfplan > plan.txt 2>&1
+          echo "exit=$?" >> "$GITHUB_OUTPUT"
+
+      - name: Open an issue when drift is found
+        if: steps.plan.outputs.exit == '2'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const plan = fs.readFileSync('infra/terraform/envs/${{ matrix.environment }}/plan.txt', 'utf8');
+            const title = `Infrastructure drift detected in ${{ matrix.environment }}`;
+            const existing = await github.rest.issues.listForRepo({
+              owner: context.repo.owner, repo: context.repo.repo,
+              state: 'open', labels: 'drift'
+            });
+            const match = existing.data.find(i => i.title === title);
+            const body = `Nightly refresh found changes outside Terraform.\n\n<details><summary>plan</summary>\n\n\`\`\`\n${plan.slice(0, 55000)}\n\`\`\`\n</details>`;
+            if (match) {
+              await github.rest.issues.createComment({ owner: context.repo.owner, repo: context.repo.repo, issue_number: match.number, body });
+            } else {
+              await github.rest.issues.create({ owner: context.repo.owner, repo: context.repo.repo, title, body, labels: ['drift', 'infrastructure'] });
+            }

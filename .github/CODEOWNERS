@@ -1,0 +1,8 @@
+# Infrastructure and security-relevant paths need a platform reviewer.
+*                                   @your-org/platform-engineering
+/infra/terraform/                   @your-org/platform-engineering @your-org/security
+/policy/                            @your-org/security
+/services/ai-gateway/app/guardrails.py  @your-org/security
+/.github/workflows/                 @your-org/platform-engineering
+/services/ai-gateway/config/prompts/    @your-org/ai-quality
+/docs/adr/                          @your-org/platform-engineering
