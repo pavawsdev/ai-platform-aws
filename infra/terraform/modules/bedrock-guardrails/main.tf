@@ -121,7 +121,7 @@ resource "aws_bedrock_model_invocation_logging_configuration" "this" {
 
     s3_config {
       bucket_name = var.audit_bucket_name
-      key_prefix  = "bedrock/invocations"
+      key_prefix  = "bedrock/invocations" # gitleaks:allow - S3 prefix, not a secret
     }
   }
 }
