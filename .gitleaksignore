@@ -1,0 +1,16 @@
+# Known false positives, not real secrets. gitleaks scans every commit's diff
+# in history, so an inline `gitleaks:allow` comment only suppresses a match in
+# the commit that has the comment - it can't retroactively clear a match in an
+# earlier commit's diff. Fingerprints below are read on every scan regardless
+# of which commit introduced the line.
+
+# bedrock-guardrails/main.tf line 124 sets an S3 object key prefix (not a
+# secret). The generic-api-key rule matched on the word "key" and the
+# assigned string's entropy.
+49d70e2911a71fa77bacb40359daa09e482cf8a9:infra/terraform/modules/bedrock-guardrails/main.tf:generic-api-key:124
+
+# An earlier version of this file quoted that same snippet inline in its own
+# explanatory comment, which reproduced the matching pattern and triggered a
+# finding against this file's own prior commit. The comment no longer quotes
+# it, but the historical commit's diff still shows the old wording forever.
+4248bea3018bced802df80102166c268261464e4:.gitleaksignore:generic-api-key:7
