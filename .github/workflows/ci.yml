@@ -31,8 +31,8 @@ jobs:
       terraform: ${{ steps.tf.outputs.terraform }}
       charts: ${{ steps.tf.outputs.charts }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: dorny/paths-filter@v3
+      - uses: actions/checkout@v7
+      - uses: dorny/paths-filter@v4
         id: filter
         with:
           filters: |
@@ -40,7 +40,7 @@ jobs:
             rag-service: ['services/rag-service/**', 'libs/**']
             agent-service: ['services/agent-service/**', 'libs/**']
             eval-service: ['services/eval-service/**', 'libs/**']
-      - uses: dorny/paths-filter@v3
+      - uses: dorny/paths-filter@v4
         id: tf
         with:
           filters: |
@@ -59,8 +59,8 @@ jobs:
       run:
         working-directory: services/${{ matrix.service }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
@@ -88,14 +88,14 @@ jobs:
 
       - name: Upload SARIF
         if: always()
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: services/${{ matrix.service }}/bandit.sarif
           category: bandit-${{ matrix.service }}
 
       - name: Publish test results
         if: always()
-        uses: mikepenz/action-junit-report@v5
+        uses: mikepenz/action-junit-report@v6
         with:
           report_paths: services/${{ matrix.service }}/results.xml
 
@@ -111,8 +111,8 @@ jobs:
       matrix:
         env: [dev, prod]
     steps:
-      - uses: actions/checkout@v4
-      - uses: hashicorp/setup-terraform@v3
+      - uses: actions/checkout@v7
+      - uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: 1.10.3
 
@@ -127,7 +127,7 @@ jobs:
         working-directory: infra/terraform/envs/${{ matrix.env }}
         run: terraform validate
 
-      - uses: terraform-linters/setup-tflint@v4
+      - uses: terraform-linters/setup-tflint@v6
         with:
           tflint_version: v0.54.0
       - name: tflint
@@ -136,7 +136,7 @@ jobs:
           tflint --recursive --config="${GITHUB_WORKSPACE}/.tflint.hcl" --format compact
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ secrets.AWS_PLAN_ROLE_ARN }}
           aws-region: ap-south-1
@@ -157,7 +157,7 @@ jobs:
 
       - name: Comment plan on PR
         if: github.event_name == 'pull_request'
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const fs = require('fs');
@@ -175,8 +175,8 @@ jobs:
     if: needs.changes.outputs.charts == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: azure/setup-helm@v4
+      - uses: actions/checkout@v7
+      - uses: azure/setup-helm@v5
         with:
           version: v3.16.3
 
@@ -207,10 +207,10 @@ jobs:
       matrix:
         service: ${{ fromJSON(needs.changes.outputs.services) }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
       - name: Build (no push)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: services/${{ matrix.service }}/Dockerfile
@@ -229,7 +229,7 @@ jobs:
           exit-code: "1"
           ignore-unfixed: true
       - if: always()
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: trivy.sarif
           category: trivy-${{ matrix.service }}
