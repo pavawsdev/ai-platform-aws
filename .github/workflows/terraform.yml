@@ -40,19 +40,37 @@ jobs:
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.10.3
-      - uses: aws-actions/configure-aws-credentials@v4
+
+      # No AWS account is wired to this repo yet (AWS_APPLY_ROLE_ARN unset) -
+      # skip the apply cleanly rather than fail noisily on every push to
+      # main. Remove this probe once a real account exists.
+      - name: Check AWS credentials are configured
+        id: probe
+        run: |
+          if [ -z "${{ secrets.AWS_APPLY_ROLE_ARN }}" ]; then
+            echo "::notice::AWS_APPLY_ROLE_ARN is not set - skipping apply-dev"
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - if: steps.probe.outputs.configured == 'true'
+        uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_APPLY_ROLE_ARN }}
           aws-region: ap-south-1
       - name: Apply
+        if: steps.probe.outputs.configured == 'true'
         working-directory: infra/terraform/envs/dev
         run: |
           terraform init -backend-config=backend.hcl
           terraform apply -var-file=dev.tfvars -auto-approve
       - name: Export outputs for GitOps
+        if: steps.probe.outputs.configured == 'true'
         working-directory: infra/terraform/envs/dev
         run: terraform output -json > "${GITHUB_WORKSPACE}/tf-outputs-dev.json"
-      - uses: actions/upload-artifact@v4
+      - if: steps.probe.outputs.configured == 'true'
+        uses: actions/upload-artifact@v4
         with:
           name: tf-outputs-dev
           path: tf-outputs-dev.json
@@ -70,12 +88,26 @@ jobs:
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.10.3
-      - uses: aws-actions/configure-aws-credentials@v4
+
+      # See apply-dev's comment above - same reasoning, same fix.
+      - name: Check AWS credentials are configured
+        id: probe
+        run: |
+          if [ -z "${{ secrets.AWS_APPLY_ROLE_ARN }}" ]; then
+            echo "::notice::AWS_APPLY_ROLE_ARN is not set - skipping apply-prod"
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - if: steps.probe.outputs.configured == 'true'
+        uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_APPLY_ROLE_ARN }}
           aws-region: ap-south-1
 
       - name: Plan
+        if: steps.probe.outputs.configured == 'true'
         working-directory: infra/terraform/envs/prod
         run: |
           terraform init -backend-config=backend.hcl
@@ -83,6 +115,7 @@ jobs:
             [ $? -eq 2 ]
 
       - name: Guard against destructive changes
+        if: steps.probe.outputs.configured == 'true'
         working-directory: infra/terraform/envs/prod
         run: |
           terraform show -json tfplan > tfplan.json
@@ -96,6 +129,7 @@ jobs:
           fi
 
       - name: Apply
+        if: steps.probe.outputs.configured == 'true'
         working-directory: infra/terraform/envs/prod
         run: terraform apply tfplan
 

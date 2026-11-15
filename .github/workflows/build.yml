@@ -39,16 +39,34 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: aws-actions/configure-aws-credentials@v4
+      # No AWS account is wired to this repo yet (AWS_PLAN_ROLE_ARN unset) -
+      # every step below needs real AWS/ECR access, so skip cleanly rather
+      # than fail noisily on every push. Remove this probe once a real
+      # account exists; every later step already becomes a no-op gate.
+      - name: Check AWS credentials are configured
+        id: probe
+        run: |
+          if [ -z "${{ secrets.AWS_PLAN_ROLE_ARN }}" ]; then
+            echo "::notice::AWS_PLAN_ROLE_ARN is not set - skipping build/push/sign for ${{ matrix.service }}"
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - if: steps.probe.outputs.configured == 'true'
+        uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_PLAN_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - uses: aws-actions/amazon-ecr-login@v2
+      - if: steps.probe.outputs.configured == 'true'
+        uses: aws-actions/amazon-ecr-login@v2
 
-      - uses: docker/setup-buildx-action@v3
+      - if: steps.probe.outputs.configured == 'true'
+        uses: docker/setup-buildx-action@v3
 
       - name: Derive version
+        if: steps.probe.outputs.configured == 'true'
         id: version
         run: |
           if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
@@ -58,6 +76,7 @@ jobs:
           fi
 
       - name: Build and push
+        if: steps.probe.outputs.configured == 'true'
         id: push
         uses: docker/build-push-action@v6
         with:
@@ -80,6 +99,7 @@ jobs:
       # Scanning the pushed image, not the local one: this is the artifact that
       # will actually run, digest and all.
       - name: Scan pushed image
+        if: steps.probe.outputs.configured == 'true'
         uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ${{ env.ECR_REGISTRY }}/${{ env.ECR_NAMESPACE }}/${{ matrix.service }}@${{ steps.push.outputs.digest }}
@@ -89,33 +109,39 @@ jobs:
           ignore-unfixed: true
 
       - name: Generate SBOM
+        if: steps.probe.outputs.configured == 'true'
         uses: anchore/sbom-action@v0
         with:
           image: ${{ env.ECR_REGISTRY }}/${{ env.ECR_NAMESPACE }}/${{ matrix.service }}@${{ steps.push.outputs.digest }}
           format: cyclonedx-json
           output-file: sbom-${{ matrix.service }}.json
 
-      - uses: sigstore/cosign-installer@v3
+      - if: steps.probe.outputs.configured == 'true'
+        uses: sigstore/cosign-installer@v3
         with:
           cosign-release: v2.4.1
 
       - name: Sign (keyless)
+        if: steps.probe.outputs.configured == 'true'
         run: |
           cosign sign --yes \
             "${ECR_REGISTRY}/${ECR_NAMESPACE}/${{ matrix.service }}@${{ steps.push.outputs.digest }}"
 
       - name: Attest SBOM
+        if: steps.probe.outputs.configured == 'true'
         run: |
           cosign attest --yes --type cyclonedx \
             --predicate sbom-${{ matrix.service }}.json \
             "${ECR_REGISTRY}/${ECR_NAMESPACE}/${{ matrix.service }}@${{ steps.push.outputs.digest }}"
 
       - name: Record digest
+        if: steps.probe.outputs.configured == 'true'
         id: collect
         run: |
           echo "digests=${{ matrix.service }}=${{ steps.push.outputs.digest }}" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/upload-artifact@v4
+      - if: steps.probe.outputs.configured == 'true'
+        uses: actions/upload-artifact@v4
         with:
           name: sbom-${{ matrix.service }}
           path: sbom-${{ matrix.service }}.json
@@ -141,12 +167,24 @@ jobs:
         with:
           token: ${{ secrets.GITOPS_TOKEN }}
 
-      - uses: aws-actions/configure-aws-credentials@v4
+      - name: Check AWS credentials are configured
+        id: probe
+        run: |
+          if [ -z "${{ secrets.AWS_PLAN_ROLE_ARN }}" ]; then
+            echo "::notice::AWS_PLAN_ROLE_ARN is not set - nothing to pin, no GitOps commit to make"
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - if: steps.probe.outputs.configured == 'true'
+        uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_PLAN_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Pin digests in the dev overlay
+        if: steps.probe.outputs.configured == 'true'
         run: |
           set -euo pipefail
           mkdir -p deploy/helm/values/overlays/dev
@@ -166,6 +204,7 @@ jobs:
           done
 
       - name: Commit
+        if: steps.probe.outputs.configured == 'true'
         run: |
           git config user.name "platform-ci"
           git config user.email "platform-ci@users.noreply.github.com"
