@@ -122,6 +122,12 @@ jobs:
     needs: [preflight, verify, soak]
     if: always() && needs.verify.result == 'success' && (needs.soak.result == 'success' || inputs.skip_eval)
     runs-on: ubuntu-latest
+    # Shared group with build.yml's update-dev-manifests job - see that job's
+    # comment. Both push commits straight onto main with no retry on a
+    # non-fast-forward rejection, so every GitOps write-back serializes here.
+    concurrency:
+      group: gitops-manifest-${{ github.ref_name }}
+      cancel-in-progress: false
     environment:
       name: prod       # required reviewers gate this step
     steps:
