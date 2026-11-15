@@ -46,7 +46,8 @@ jobs:
           skip_check: >-
             CKV_AWS_144,CKV2_AWS_62,CKV_AWS_274,CKV_AWS_109,CKV_AWS_111,CKV_AWS_356,
             CKV_AWS_192,CKV_AWS_382,CKV_AWS_394,CKV2_AWS_3,CKV2_AWS_8,CKV_AWS_21,
-            CKV2_AWS_61,CKV2_AWS_57,CKV_AWS_18,CKV_AWS_355
+            CKV2_AWS_61,CKV2_AWS_57,CKV_AWS_18,CKV_AWS_355,CKV_AWS_288,CKV_AWS_289,
+            CKV_AWS_290
           # CKV_AWS_144  cross-region replication is env-conditional (enable_dr)
           # CKV2_AWS_62  S3 event notifications are not used by design
           # CKV_AWS_274  github_apply's AdministratorAccess is gated by the protected
@@ -74,6 +75,11 @@ jobs:
           #              (aps:Query*, cloudwatch:Get/List/Describe*, xray:Get*,
           #              tag:GetResources) - most of these AWS APIs don't support
           #              resource-level scoping at all, only Resource="*"
+          # CKV_AWS_288/289/290  workload_boundary in stacks/platform is a permissions
+          #              BOUNDARY (a ceiling), not a grant - the broad Allow is capped by
+          #              explicit Deny statements on IAM/org mutation, data destruction and
+          #              disabling security controls. Per-role policies do the real scoping;
+          #              narrowing the boundary's Allow would defeat its purpose.
 
       - uses: github/codeql-action/upload-sarif@v3
         if: always()
