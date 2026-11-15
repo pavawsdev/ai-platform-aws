@@ -1,12 +1,14 @@
 module "platform" {
   source = "../../stacks/platform"
 
-  project     = var.project
-  environment = "dev"
-  region      = var.region
-  owner       = var.owner
-  cost_center = var.cost_center
-  repo_url    = var.repo_url
+  project            = var.project
+  environment        = "dev"
+  region             = var.region
+  owner              = var.owner
+  cost_center        = var.cost_center
+  repo_url           = var.repo_url
+  extra_tags         = var.extra_tags
+  workload_namespace = var.workload_namespace
 
   vpc_cidr           = var.vpc_cidr
   az_count           = var.az_count

@@ -4,7 +4,6 @@
 # where the AWS API genuinely has no resource-level permission.
 ###############################################################################
 data "aws_caller_identity" "current" {}
-data "aws_region" "current" {}
 
 locals {
   bedrock_model_arns = [

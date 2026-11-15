@@ -15,7 +15,6 @@ locals {
   tags = merge(var.tags, { Module = "eks" })
 }
 
-data "aws_caller_identity" "current" {}
 data "aws_partition" "current" {}
 
 ###############################  Cluster IAM  #################################
