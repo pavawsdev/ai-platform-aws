@@ -207,9 +207,16 @@ jobs:
             echo "::endgroup::"
           done
 
-      - uses: yannh/kubeconform-action@v1
-        with:
-          args: -strict -ignore-missing-schemas -summary /tmp/*.rendered
+      # yannh/kubeconform-action (the marketplace wrapper) was deleted
+      # upstream - confirmed 404, caught by Dependabot failing to resolve it.
+      # kubeconform itself (yannh/kubeconform) is alive and still publishes
+      # to ghcr.io, so this runs it directly rather than depending on a
+      # third-party Action wrapper at all - same docker-run pattern this job
+      # already uses for kyverno-cli below.
+      - name: Validate rendered manifests against Kubernetes schemas
+        run: |
+          docker run --rm -v /tmp:/manifests ghcr.io/yannh/kubeconform:v0.8.0 \
+            -strict -ignore-missing-schemas -summary /manifests/*.rendered
 
       - name: Policy test rendered manifests
         run: |

@@ -163,9 +163,16 @@ jobs:
     permissions:
       contents: write
     steps:
+      # Falls back to the ambient GITHUB_TOKEN when GITOPS_TOKEN isn't
+      # configured - an explicitly empty token (vs. omitting the input
+      # entirely) overrides actions/checkout's own default and fails
+      # checkout outright with "Input required and not supplied: token".
+      # The job's own permissions: contents: write above is already enough
+      # for GITHUB_TOKEN to push; a separate PAT only matters if a GitOps
+      # commit needs to trigger other workflows (GITHUB_TOKEN pushes don't).
       - uses: actions/checkout@v4
         with:
-          token: ${{ secrets.GITOPS_TOKEN }}
+          token: ${{ secrets.GITOPS_TOKEN || github.token }}
 
       - name: Check AWS credentials are configured
         id: probe
