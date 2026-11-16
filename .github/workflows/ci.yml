@@ -135,13 +135,30 @@ jobs:
           tflint --init --config="${GITHUB_WORKSPACE}/.tflint.hcl"
           tflint --recursive --config="${GITHUB_WORKSPACE}/.tflint.hcl" --format compact
 
+      # No AWS account is wired to this repo yet (AWS_PLAN_ROLE_ARN unset).
+      # fmt/validate/tflint above still run for real - they need no cloud
+      # access - but plan/policy-check/PR-comment do, so skip them cleanly
+      # rather than fail noisily on every PR. Remove this probe once a real
+      # account exists.
+      - name: Check AWS credentials are configured
+        id: probe
+        run: |
+          if [ -z "${{ secrets.AWS_PLAN_ROLE_ARN }}" ]; then
+            echo "::notice::AWS_PLAN_ROLE_ARN is not set - skipping terraform plan for ${{ matrix.env }}"
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Configure AWS credentials
+        if: steps.probe.outputs.configured == 'true'
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_PLAN_ROLE_ARN }}
           aws-region: ap-south-1
 
       - name: Plan
+        if: steps.probe.outputs.configured == 'true'
         id: plan
         working-directory: infra/terraform/envs/${{ matrix.env }}
         run: |
@@ -151,12 +168,13 @@ jobs:
           terraform show -no-color tfplan > plan.txt
 
       - name: Policy check (conftest)
+        if: steps.probe.outputs.configured == 'true'
         uses: docker://openpolicyagent/conftest:v0.56.0
         with:
           args: test --policy policy/opa infra/terraform/envs/${{ matrix.env }}/tfplan.json
 
       - name: Comment plan on PR
-        if: github.event_name == 'pull_request'
+        if: steps.probe.outputs.configured == 'true' && github.event_name == 'pull_request'
         uses: actions/github-script@v7
         with:
           script: |

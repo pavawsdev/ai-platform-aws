@@ -21,12 +21,28 @@ jobs:
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.10.3
-      - uses: aws-actions/configure-aws-credentials@v4
+
+      # No AWS account is wired to this repo yet (AWS_PLAN_ROLE_ARN unset) -
+      # skip cleanly rather than fail every single night. Remove this probe
+      # once a real account exists.
+      - name: Check AWS credentials are configured
+        id: probe
+        run: |
+          if [ -z "${{ secrets.AWS_PLAN_ROLE_ARN }}" ]; then
+            echo "::notice::AWS_PLAN_ROLE_ARN is not set - skipping drift check for ${{ matrix.environment }}"
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - if: steps.probe.outputs.configured == 'true'
+        uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_PLAN_ROLE_ARN }}
           aws-region: ap-south-1
 
       - name: Plan (refresh only)
+        if: steps.probe.outputs.configured == 'true'
         id: plan
         working-directory: infra/terraform/envs/${{ matrix.environment }}
         continue-on-error: true
