@@ -131,9 +131,12 @@ jobs:
     environment:
       name: prod       # required reviewers gate this step
     steps:
+      # See build.yml's update-dev-manifests job for why - same fallback,
+      # same reason: an explicitly empty token fails checkout outright
+      # instead of falling back to its own default.
       - uses: actions/checkout@v4
         with:
-          token: ${{ secrets.GITOPS_TOKEN }}
+          token: ${{ secrets.GITOPS_TOKEN || github.token }}
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_PLAN_ROLE_ARN }}
