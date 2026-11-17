@@ -137,6 +137,18 @@ jobs:
           sarif_file: trivy-fs.sarif
           category: trivy-fs-${{ matrix.service }}
 
+      # pip-audit queries the PyPI Advisory Database (OSV) directly - a
+      # narrower, Python-package-specific source than Trivy's general fs
+      # scan, and it catches advisories Trivy's DB hasn't ingested yet (or
+      # vice versa). Both run; either failing blocks this required check,
+      # same as Trivy already does - Dependabot proposing a bump is not by
+      # itself evidence the bump is safe to merge.
+      - name: pip-audit (PyPI Advisory Database)
+        if: steps.probe.outputs.exists == 'true'
+        run: |
+          python3 -m pip install -q pip-audit
+          python3 -m pip_audit -r services/${{ matrix.service }}/requirements.txt --desc
+
   codeql:
     # Same reasoning as the dependencies job above: CodeQL's Python extractor
     # errors with "no source code seen" if there is nothing to build yet.
