@@ -36,8 +36,8 @@ jobs:
     environment:
       name: dev
     steps:
-      - uses: actions/checkout@v4
-      - uses: hashicorp/setup-terraform@v3
+      - uses: actions/checkout@v7
+      - uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: 1.10.3
 
@@ -55,7 +55,7 @@ jobs:
           fi
 
       - if: steps.probe.outputs.configured == 'true'
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ secrets.AWS_APPLY_ROLE_ARN }}
           aws-region: ap-south-1
@@ -70,7 +70,7 @@ jobs:
         working-directory: infra/terraform/envs/dev
         run: terraform output -json > "${GITHUB_WORKSPACE}/tf-outputs-dev.json"
       - if: steps.probe.outputs.configured == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: tf-outputs-dev
           path: tf-outputs-dev.json
@@ -84,8 +84,8 @@ jobs:
       # That is the change-management control; it is not enforceable in YAML.
       name: prod
     steps:
-      - uses: actions/checkout@v4
-      - uses: hashicorp/setup-terraform@v3
+      - uses: actions/checkout@v7
+      - uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: 1.10.3
 
@@ -101,7 +101,7 @@ jobs:
           fi
 
       - if: steps.probe.outputs.configured == 'true'
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ secrets.AWS_APPLY_ROLE_ARN }}
           aws-region: ap-south-1
